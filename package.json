@@ -1,0 +1,30 @@
+{
+  "name": "SmartCollect",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "android": "react-native run-android",
+    "start": "react-native start",
+    "build:apk": "cd android && gradlew assembleRelease",
+    "build:debug": "cd android && gradlew assembleDebug"
+  },
+  "dependencies": {
+    "react": "18.2.0",
+    "react-native": "0.73.6",
+    "react-native-safe-area-context": "^4.9.0",
+    "react-native-webview": "^13.8.6"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.24.0",
+    "@babel/preset-env": "^7.24.0",
+    "@babel/runtime": "^7.24.0",
+    "@react-native/babel-preset": "0.73.21",
+    "@react-native/metro-config": "0.73.5",
+    "@react-native/typescript-config": "0.73.1",
+    "babel-plugin-module-resolver": "^5.0.0",
+    "metro-config": "^0.80.6"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

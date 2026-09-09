@@ -1,0 +1,34 @@
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Android
+android/app/build/
+android/build/
+android/.gradle/
+android/app/debug/
+android/app/release/
+*.apk
+*.aab
+
+# iOS
+ios/Pods/
+ios/build/
+ios/*.xcworkspace
+!ios/SmartCollect.xcworkspace/contents.xcworkspacedata
+*.orig.*
+
+# macOS
+.DS_Store
+
+# React Native
+.expo/
+.metro/
+*.jsbundle
+
+# Environment & Build artifacts
+build/
+dist/
+*.log
