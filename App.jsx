@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   StyleSheet,
   View,
@@ -12,12 +12,16 @@ import {
   PermissionsAndroid,
   Platform,
   Animated,
+  AppState,
+  Alert,
+  Linking,
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 
 const { FileDownloadModule } = NativeModules;
-const TARGET_URL = 'https://productuat.markytics.ai/login';
+// Direct URL: if authenticated it opens My Customers; if not, ProtectedRoute redirects to /login:
+const TARGET_URL = 'https://dev-productv3.markytics.ai/portal/my-customers';
 const LOGO_IMG = require('./assets/app_logo.jpg');
 
 // Script to lock viewport scale and prevent website zooming
@@ -58,9 +62,11 @@ const PERSIST_SESSION_JS = `
       for (var i = 0; i < AUTH_KEYS.length; i++) {
         var k = AUTH_KEYS[i];
         try {
-          var val = localStorage.getItem(PREFIX + k);
-          if (val && !sessionStorage.getItem(k)) {
+          var val = localStorage.getItem(PREFIX + k) || localStorage.getItem(k);
+          if (val) {
             sessionStorage.setItem(k, val);
+            localStorage.setItem(PREFIX + k, val);
+            localStorage.setItem(k, val);
           }
         } catch(e) {}
       }
@@ -176,6 +182,62 @@ const PERSIST_SESSION_JS = `
         }
         return origOpen.apply(this, arguments);
       };
+
+      // Direct tap listener on <a> elements with download or file extensions
+      document.addEventListener('click', function(e) {
+        var el = e.target;
+        var a = el && el.closest ? el.closest('a') : null;
+        if (!a) return;
+        var href = a.href || a.getAttribute('href') || '';
+        var downloadAttr = a.getAttribute('download') || a.download;
+        var hasDownload = downloadAttr !== null && downloadAttr !== undefined && downloadAttr !== false;
+        var isBlob = href.indexOf('blob:') === 0;
+        var isData = href.indexOf('data:') === 0;
+        var isFileUrl = /\\.(xlsx|xls|csv|pdf|docx|zip)(\\?.*)?$/i.test(href) || href.indexOf('sample_') !== -1;
+
+        if (isBlob || isData || hasDownload || isFileUrl) {
+          var filename = typeof downloadAttr === 'string' && downloadAttr.length > 0 && downloadAttr !== 'true'
+            ? downloadAttr
+            : (href.split('/').pop().split('?')[0] || ('download_' + Date.now() + '.csv'));
+
+          if (isBlob) {
+            e.preventDefault();
+            fetch(href)
+              .then(function(res) { return res.blob(); })
+              .then(function(blob) {
+                var reader = new FileReader();
+                reader.onloadend = function() {
+                  if (window.ReactNativeWebView) {
+                    window.ReactNativeWebView.postMessage(JSON.stringify({
+                      type: 'FILE_DOWNLOAD_BASE64',
+                      filename: filename,
+                      dataUrl: reader.result,
+                      mimeType: blob.type || 'application/octet-stream'
+                    }));
+                  }
+                };
+                reader.readAsDataURL(blob);
+              })
+              .catch(function(e) {});
+            return;
+          }
+
+          var absoluteUrl = a.href || href;
+          if (absoluteUrl.indexOf('/') === 0) {
+            absoluteUrl = window.location.origin + absoluteUrl;
+          }
+          if (absoluteUrl.indexOf('http') === 0 && window.ReactNativeWebView) {
+            e.preventDefault();
+            window.ReactNativeWebView.postMessage(JSON.stringify({
+              type: 'FILE_DOWNLOAD_URL',
+              filename: filename,
+              url: absoluteUrl,
+              mimeType: 'application/octet-stream'
+            }));
+          }
+        }
+      }, true);
+
       // 7. Dynamic Permission Interception for WebRTC, Camera (Feedback), and Location
       window.__pendingPermissionRequests = window.__pendingPermissionRequests || {};
 
@@ -401,6 +463,8 @@ function MainApp() {
   const [canGoBack, setCanGoBack] = useState(false);
   const [loading, setLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
+  const [isOfflineModeActive, setIsOfflineModeActive] = useState(false);
+
   // True only when the top frame is genuinely on Microsoft's OAuth login page
   const [inMicrosoftAuth, setInMicrosoftAuth] = useState(false);
   // Animation value for smooth fade/slide
@@ -416,29 +480,79 @@ function MainApp() {
     }).start();
   }, [inMicrosoftAuth]);
 
-  // Request all 3 major permissions upfront on app open (Camera, Mic, Location)
-  useEffect(() => {
-    const requestInitialPermissions = async () => {
-      if (Platform.OS === 'android') {
-        try {
-          await PermissionsAndroid.requestMultiple([
-            PermissionsAndroid.PERMISSIONS.CAMERA,
-            PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
-            PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-            PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
-          ]);
-        } catch (_) {
-          // If rejected at that moment, leave it. Fallback is handled on-demand during actual actions.
+  // Check and request Camera, Microphone, and Location permissions upfront
+  // and prompt user if any essential permission is denied.
+  const checkAndEnsureAllPermissions = useCallback(async (showPromptOnDenied = true) => {
+    if (Platform.OS !== 'android') return true;
+
+    try {
+      const required = [
+        PermissionsAndroid.PERMISSIONS.CAMERA,
+        PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+      ];
+
+      const needRequest = [];
+      for (const perm of required) {
+        const has = await PermissionsAndroid.check(perm);
+        if (!has) {
+          needRequest.push(perm);
         }
       }
-    };
 
+      if (needRequest.includes(PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION)) {
+        needRequest.push(PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION);
+      }
+
+      if (needRequest.length > 0) {
+        await PermissionsAndroid.requestMultiple(needRequest);
+      }
+
+      // Verify all 3 core permissions
+      const hasCam = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.CAMERA);
+      const hasMic = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO);
+      const hasLoc =
+        (await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION)) ||
+        (await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION));
+
+      if ((!hasCam || !hasMic || !hasLoc) && showPromptOnDenied) {
+        const missing = [];
+        if (!hasCam) missing.push('Camera');
+        if (!hasMic) missing.push('Microphone');
+        if (!hasLoc) missing.push('Location');
+
+        Alert.alert(
+          'Permissions Required',
+          `Mark One requires ${missing.join(', ')} access to function properly (photo capture, voice features, and location verification). Please grant these permissions to continue.`,
+          [
+            {
+              text: 'Open Settings',
+              onPress: () => Linking.openSettings(),
+            },
+            {
+              text: 'Allow Permissions',
+              onPress: () => checkAndEnsureAllPermissions(true),
+            },
+          ],
+          { cancelable: false }
+        );
+        return false;
+      }
+      return true;
+    } catch (e) {
+      console.warn('Failed to request initial permissions:', e);
+      return false;
+    }
+  }, []);
+
+  // Request all permissions upfront on app open
+  useEffect(() => {
     const permTimer = setTimeout(() => {
-      requestInitialPermissions();
-    }, 600);
+      checkAndEnsureAllPermissions(true);
+    }, 500);
 
     return () => clearTimeout(permTimer);
-  }, []);
+  }, [checkAndEnsureAllPermissions]);
 
   // Failsafe: ensure loading screen dismisses after 3 seconds even if website slow
   useEffect(() => {
@@ -447,6 +561,28 @@ function MainApp() {
     }, 3000);
     return () => clearTimeout(timer);
   }, []);
+
+  // When app returns to foreground from background:
+  // 1. Notify WebView to auto-submit pending feedbacks
+  // 2. Silently verify permissions (e.g., if user came back from Settings)
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', nextAppState => {
+      if (nextAppState === 'active') {
+        if (webViewRef.current) {
+          webViewRef.current.injectJavaScript(`
+            if (typeof window !== 'undefined') {
+              window.dispatchEvent(new CustomEvent('app_resumed_foreground'));
+            }
+            true;
+          `);
+        }
+        if (Platform.OS === 'android') {
+          checkAndEnsureAllPermissions(false);
+        }
+      }
+    });
+    return () => subscription.remove();
+  }, [checkAndEnsureAllPermissions]);
 
   // Navigate back to the main login page (abort Microsoft auth)
   const returnToLogin = () => {
@@ -461,7 +597,7 @@ function MainApp() {
         webViewRef.current.injectJavaScript(
           `window.location.replace('${TARGET_URL}'); true;`
         );
-      } catch (_) {}
+      } catch (_) { }
     }
 
     // 3. Unlock after transition completes
@@ -494,11 +630,22 @@ function MainApp() {
 
   const handleRetry = () => {
     setHasError(false);
+    setIsOfflineModeActive(false);
     setLoading(true);
     if (webViewRef.current) {
       webViewRef.current.reload();
     }
-    setTimeout(() => setLoading(false), 2000);
+    setTimeout(() => setLoading(false), 3000);
+  };
+
+  const handleContinueOffline = () => {
+    setHasError(false);
+    setIsOfflineModeActive(true);
+    setLoading(false);
+    // Reload with cache mode active if webView is blank
+    if (webViewRef.current) {
+      webViewRef.current.reload();
+    }
   };
 
   const handleMessage = async event => {
@@ -521,6 +668,11 @@ function MainApp() {
           const js = `if (window.__resolvePermissionRequest) { window.__resolvePermissionRequest('${reqId}', ${granted}); } true;`;
           webViewRef.current.injectJavaScript(js);
         }
+      } else if (message.type === 'NETWORK_STATUS') {
+        // Automatically switch back to LOAD_DEFAULT when online
+        if (message.isOnline) {
+          setIsOfflineModeActive(false);
+        }
       }
     } catch (e) {
       // Ignored
@@ -528,19 +680,38 @@ function MainApp() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
-      <StatusBar barStyle="light-content" backgroundColor="#0F172A" />
+    // Edges 'top' and 'bottom': Ensures UI starts below the network/battery status bar
+    // and ends cleanly above bottom navigation buttons / gesture bar without overlapping.
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+      <StatusBar barStyle="light-content" backgroundColor="#0F172A" translucent={false} />
 
-      {hasError ? (
+      {/* When connection fails and user hasn't approved offline mode yet, prompt them */}
+      {hasError && !isOfflineModeActive ? (
         <View style={styles.errorContainer}>
-          <Text style={styles.errorIcon}>⚠️</Text>
-          <Text style={styles.errorTitle}>Connection Failed</Text>
+          <View style={styles.errorIconWrapper}>
+            <Text style={styles.errorIcon}>📡</Text>
+          </View>
+          <Text style={styles.errorTitle}>Connection Notice</Text>
           <Text style={styles.errorMessage}>
-            Unable to connect to Mark One portal. Please check your internet connection and try again.
+            Your device does not have good internet connection. Are you still wish to continue?
           </Text>
-          <TouchableOpacity style={styles.retryButton} onPress={handleRetry}>
-            <Text style={styles.retryButtonText}>Retry Connection</Text>
-          </TouchableOpacity>
+          <View style={styles.buttonRow}>
+            <TouchableOpacity
+              style={[styles.actionButton, styles.retryButton]}
+              onPress={handleRetry}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.retryButtonText}>No (Retry)</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.actionButton, styles.offlineButton]}
+              onPress={handleContinueOffline}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.offlineButtonText}>Yes (Continue)</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       ) : (
         <View style={styles.webviewContainer}>
@@ -550,19 +721,31 @@ function MainApp() {
             style={styles.webview}
             javaScriptEnabled={true}
             domStorageEnabled={true}
+            databaseEnabled={true}
+            // Offline Caching: When online, use standard LOAD_DEFAULT so API GETs are always fresh.
+            // When offline, use LOAD_CACHE_ELSE_NETWORK to load cached resources.
+            cacheEnabled={true}
+            cacheMode={isOfflineModeActive ? 'LOAD_CACHE_ELSE_NETWORK' : 'LOAD_DEFAULT'}
             sharedCookiesEnabled={true}
             thirdPartyCookiesEnabled={true}
             startInLoadingState={false}
-            allowFileAccess={false}
-            allowFileAccessFromFileURLs={false}
-            allowUniversalAccessFromFileURLs={false}
-            mixedContentMode="never"
+            allowFileAccess={true}
+            allowFileAccessFromFileURLs={true}
+            allowUniversalAccessFromFileURLs={true}
+            mixedContentMode="always"
             allowsInlineMediaPlayback={true}
             mediaPlaybackRequiresUserAction={false}
+            // Grant camera and microphone access to the WebView
             mediaCapturePermissionGrantType="grant"
+            onPermissionRequest={request => {
+              // Automatically grant WebChromeClient requested resources (camera/mic)
+              if (request && typeof request.grant === 'function') {
+                request.grant(request.resources);
+              }
+            }}
             geolocationEnabled={true}
             allowsProtectedMedia={true}
-            originWhitelist={['https://*']}
+            originWhitelist={['*']}
             setBuiltInZoomControls={false}
             setDisplayZoomControls={false}
             scalesPageToFit={false}
@@ -572,17 +755,20 @@ function MainApp() {
             onMessage={handleMessage}
             onShouldStartLoadWithRequest={request => {
               const url = request.url || '';
+              const cleanUrl = url.split('?')[0].toLowerCase();
               // File downloads: intercept and hand off to native
               if (
-                url.endsWith('.csv') ||
-                url.endsWith('.xlsx') ||
-                url.endsWith('.xls') ||
-                url.endsWith('.pdf') ||
+                cleanUrl.endsWith('.csv') ||
+                cleanUrl.endsWith('.xlsx') ||
+                cleanUrl.endsWith('.xls') ||
+                cleanUrl.endsWith('.pdf') ||
+                cleanUrl.endsWith('.docx') ||
+                cleanUrl.endsWith('.zip') ||
                 url.includes('sample_') ||
                 url.includes('/sample_scrub_file.csv')
               ) {
                 if (FileDownloadModule) {
-                  const filename = url.split('/').pop().split('?')[0] || 'sample_file.csv';
+                  const filename = cleanUrl.split('/').pop() || 'download.csv';
                   FileDownloadModule.downloadUrl(url, filename, 'application/octet-stream');
                 }
                 return false;
@@ -628,8 +814,18 @@ function MainApp() {
             onError={syntheticEvent => {
               const { nativeEvent } = syntheticEvent;
               console.warn('WebView error: ', nativeEvent);
-              setHasError(true);
-              setLoading(false);
+              // If offline mode is already triggered, do not hide webview
+              if (!isOfflineModeActive) {
+                setHasError(true);
+                setLoading(false);
+              }
+            }}
+            renderError={() => {
+              // If offline mode is active, don't show WebView default dinosaur error
+              if (isOfflineModeActive) {
+                return <View style={styles.empty} />;
+              }
+              return null;
             }}
             onHttpError={syntheticEvent => {
               const { nativeEvent } = syntheticEvent;
@@ -704,6 +900,10 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#0F172A',
   },
+  empty: {
+    width: 0,
+    height: 0,
+  },
   loadingOverlay: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: '#0F172A',
@@ -734,9 +934,19 @@ const styles = StyleSheet.create({
     padding: 24,
     backgroundColor: '#0F172A',
   },
-  errorIcon: {
-    fontSize: 48,
+  errorIconWrapper: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: 'rgba(59, 130, 246, 0.12)',
+    justifyContent: 'center',
+    alignItems: 'center',
     marginBottom: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(59, 130, 246, 0.3)',
+  },
+  errorIcon: {
+    fontSize: 32,
   },
   errorTitle: {
     fontSize: 20,
@@ -745,23 +955,44 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   errorMessage: {
-    fontSize: 14,
+    fontSize: 15,
     color: '#94A3B8',
     textAlign: 'center',
-    marginBottom: 24,
-    lineHeight: 20,
+    marginBottom: 28,
+    lineHeight: 22,
+    maxWidth: 320,
   },
-  retryButton: {
-    backgroundColor: '#2563EB',
-    paddingVertical: 12,
-    paddingHorizontal: 24,
-    borderRadius: 8,
+  buttonRow: {
+    flexDirection: 'row',
+    width: '100%',
+    maxWidth: 340,
+    gap: 12,
+  },
+  actionButton: {
+    flex: 1,
+    paddingVertical: 13,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
     elevation: 3,
   },
+  retryButton: {
+    backgroundColor: '#1E293B',
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
   retryButtonText: {
+    color: '#CBD5E1',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  offlineButton: {
+    backgroundColor: '#D97706', // warm amber for offline mode trigger
+  },
+  offlineButtonText: {
     color: '#FFFFFF',
-    fontSize: 15,
-    fontWeight: '600',
+    fontSize: 14,
+    fontWeight: '700',
   },
   // Microsoft auth floating overlay — appears over WebView without resizing it
   msBackOverlay: {
@@ -801,4 +1032,3 @@ const styles = StyleSheet.create({
     letterSpacing: 0.2,
   },
 });
-

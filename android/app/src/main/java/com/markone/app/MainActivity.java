@@ -12,11 +12,13 @@ public class MainActivity extends ReactActivity {
   @Override
   protected void onCreate(Bundle savedInstanceState) {
     super.onCreate(savedInstanceState);
-    // MDM Security: Block screenshots and screen recording
-    getWindow().setFlags(
-        WindowManager.LayoutParams.FLAG_SECURE,
-        WindowManager.LayoutParams.FLAG_SECURE
-    );
+    // MDM Security: Block screenshots and screen recording in release builds
+    if (!BuildConfig.DEBUG) {
+      getWindow().setFlags(
+          WindowManager.LayoutParams.FLAG_SECURE,
+          WindowManager.LayoutParams.FLAG_SECURE
+      );
+    }
   }
 
   @Override
