@@ -1,6 +1,6 @@
 import os
 
-android_dir = r'c:\Auxilo\SmartCollect\android'
+android_dir = r'c:\Auxilo\MarkOne\android'
 wrapper_dir = os.path.join(android_dir, 'gradle', 'wrapper')
 os.makedirs(wrapper_dir, exist_ok=True)
 

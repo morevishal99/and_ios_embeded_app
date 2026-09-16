@@ -12,6 +12,11 @@ android/app/debug/
 android/app/release/
 *.apk
 *.aab
+*.keystore
+*.jks
+!android/app/debug.keystore
+key.properties
+android/key.properties
 
 # iOS
 ios/Pods/

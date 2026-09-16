@@ -15,9 +15,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "13B07F861A680F5B00A75B9A"
-               BuildableName = "SmartCollect.app"
-               BlueprintName = "SmartCollect"
-               ReferencedContainer = "container:SmartCollect.xcodeproj">
+               BuildableName = "MarkOne.app"
+               BlueprintName = "MarkOne"
+               ReferencedContainer = "container:MarkOne.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -33,9 +33,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "00E356ED1AD99517003FC87E"
-               BuildableName = "SmartCollectTests.xctest"
-               BlueprintName = "SmartCollectTests"
-               ReferencedContainer = "container:SmartCollect.xcodeproj">
+               BuildableName = "MarkOneTests.xctest"
+               BlueprintName = "MarkOneTests"
+               ReferencedContainer = "container:MarkOne.xcodeproj">
             </BuildableReference>
          </TestableReference>
       </Testables>
@@ -55,9 +55,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "13B07F861A680F5B00A75B9A"
-            BuildableName = "SmartCollect.app"
-            BlueprintName = "SmartCollect"
-            ReferencedContainer = "container:SmartCollect.xcodeproj">
+            BuildableName = "MarkOne.app"
+            BlueprintName = "MarkOne"
+            ReferencedContainer = "container:MarkOne.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </LaunchAction>
@@ -72,9 +72,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "13B07F861A680F5B00A75B9A"
-            BuildableName = "SmartCollect.app"
-            BlueprintName = "SmartCollect"
-            ReferencedContainer = "container:SmartCollect.xcodeproj">
+            BuildableName = "MarkOne.app"
+            BlueprintName = "MarkOne"
+            ReferencedContainer = "container:MarkOne.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>

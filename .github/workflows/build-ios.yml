@@ -29,11 +29,11 @@ jobs:
 
       - name: Build iOS Archive (Unsigned for Sideloadly)
         run: |
-          xcodebuild -workspace ios/SmartCollect.xcworkspace \
-            -scheme SmartCollect \
+          xcodebuild -workspace ios/MarkOne.xcworkspace \
+            -scheme MarkOne \
             -configuration Release \
             -sdk iphoneos \
-            -archivePath $PWD/build/SmartCollect.xcarchive \
+            -archivePath $PWD/build/MarkOne.xcarchive \
             archive \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
@@ -44,14 +44,15 @@ jobs:
       - name: Package .ipa
         run: |
           mkdir -p build/Payload
-          cp -r build/SmartCollect.xcarchive/Products/Applications/SmartCollect.app build/Payload/
+          cp -r build/MarkOne.xcarchive/Products/Applications/MarkOne.app build/Payload/
           cd build
-          zip -r SmartCollect.ipa Payload
+          zip -r MarkOne.ipa Payload
           echo "IPA created successfully."
 
       - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SmartCollect-iOS-ipa
-          path: build/SmartCollect.ipa
+          name: MarkOne-iOS-ipa
+          path: build/MarkOne.ipa
           retention-days: 7
+

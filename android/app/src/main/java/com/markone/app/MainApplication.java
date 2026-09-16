@@ -1,4 +1,4 @@
-package com.smartcollect.app;
+package com.markone.app;
 
 import android.app.Application;
 import com.facebook.react.PackageList;

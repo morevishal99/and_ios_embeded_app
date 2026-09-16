@@ -1,4 +1,4 @@
-package com.smartcollect.app;
+package com.markone.app;
 
 import android.os.Bundle;
 import android.view.WindowManager;
@@ -21,7 +21,7 @@ public class MainActivity extends ReactActivity {
 
   @Override
   protected String getMainComponentName() {
-    return "SmartCollect";
+    return "MarkOne";
   }
 
   @Override

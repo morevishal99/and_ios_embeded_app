@@ -7,10 +7,13 @@ import {
   ActivityIndicator,
   BackHandler,
   TouchableOpacity,
-  SafeAreaView,
   StatusBar,
   NativeModules,
+  PermissionsAndroid,
+  Platform,
+  Animated,
 } from 'react-native';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 
 const { FileDownloadModule } = NativeModules;
@@ -173,16 +176,269 @@ const PERSIST_SESSION_JS = `
         }
         return origOpen.apply(this, arguments);
       };
+      // 7. Dynamic Permission Interception for WebRTC, Camera (Feedback), and Location
+      window.__pendingPermissionRequests = window.__pendingPermissionRequests || {};
+
+      window.__resolvePermissionRequest = function(reqId, granted) {
+        var req = window.__pendingPermissionRequests[reqId];
+        if (req) {
+          delete window.__pendingPermissionRequests[reqId];
+          if (granted) {
+            req.resolve(true);
+          } else {
+            req.reject(new DOMException('Permission denied', 'NotAllowedError'));
+          }
+        }
+      };
+
+      function requestNativePermissions(permissions) {
+        return new Promise(function(resolve, reject) {
+          if (!window.ReactNativeWebView) {
+            resolve(true);
+            return;
+          }
+          var reqId = 'perm_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+          window.__pendingPermissionRequests[reqId] = { resolve: resolve, reject: reject };
+
+          window.ReactNativeWebView.postMessage(JSON.stringify({
+            type: 'REQUEST_PERMISSIONS',
+            reqId: reqId,
+            permissions: permissions
+          }));
+
+          // Safety timeout: if native takes more than 15 seconds, resolve anyway so browser can try
+          setTimeout(function() {
+            if (window.__pendingPermissionRequests[reqId]) {
+              delete window.__pendingPermissionRequests[reqId];
+              resolve(true);
+            }
+          }, 15000);
+        });
+      }
+
+      // WebRTC: Intercept navigator.mediaDevices.getUserMedia
+      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        var origGetUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+        navigator.mediaDevices.getUserMedia = function(constraints) {
+          var perms = [];
+          if (constraints) {
+            if (constraints.audio) perms.push('RECORD_AUDIO');
+            if (constraints.video) perms.push('CAMERA');
+          }
+          if (perms.length > 0 && window.ReactNativeWebView) {
+            return requestNativePermissions(perms).then(function() {
+              return origGetUserMedia(constraints);
+            }).catch(function(err) {
+              throw err;
+            });
+          }
+          return origGetUserMedia(constraints);
+        };
+      }
+
+      // Legacy WebRTC getUserMedia support
+      if (navigator.getUserMedia) {
+        navigator.getUserMedia = function(constraints, success, error) {
+          if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+            navigator.mediaDevices.getUserMedia(constraints)
+              .then(function(stream) { if (success) success(stream); })
+              .catch(function(err) { if (error) error(err); });
+          }
+        };
+      }
+      if (navigator.webkitGetUserMedia) {
+        navigator.webkitGetUserMedia = navigator.getUserMedia;
+      }
+
+      // Geolocation: Intercept navigator.geolocation
+      if (navigator.geolocation) {
+        var origGetCurrentPosition = navigator.geolocation.getCurrentPosition.bind(navigator.geolocation);
+        var origWatchPosition = navigator.geolocation.watchPosition.bind(navigator.geolocation);
+
+        navigator.geolocation.getCurrentPosition = function(success, error, options) {
+          if (window.ReactNativeWebView) {
+            requestNativePermissions(['ACCESS_FINE_LOCATION']).then(function() {
+              origGetCurrentPosition(success, error, options);
+            }).catch(function(err) {
+              if (error) {
+                error({ code: 1, message: 'User denied Geolocation', PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3 });
+              }
+            });
+          } else {
+            origGetCurrentPosition(success, error, options);
+          }
+        };
+
+        navigator.geolocation.watchPosition = function(success, error, options) {
+          if (window.ReactNativeWebView) {
+            requestNativePermissions(['ACCESS_FINE_LOCATION']).then(function() {
+              return origWatchPosition(success, error, options);
+            }).catch(function(err) {
+              if (error) {
+                error({ code: 1, message: 'User denied Geolocation', PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3 });
+              }
+              return 0;
+            });
+          } else {
+            return origWatchPosition(success, error, options);
+          }
+        };
+      }
+
+      // Feedback / Camera Trigger: Detect user interactions with camera elements or image file inputs
+      document.addEventListener('click', function(e) {
+        try {
+          var el = e.target;
+          if (!el) return;
+
+          var isImageInput = el.tagName === 'INPUT' && el.type === 'file' &&
+            (!el.accept || el.accept.indexOf('image') !== -1 || el.hasAttribute('capture'));
+
+          var isCameraAction = false;
+          var curr = el;
+          for (var d = 0; d < 4 && curr && curr !== document.body; d++) {
+            var text = (curr.innerText || curr.textContent || '').toLowerCase();
+            var aria = (curr.getAttribute('aria-label') || '').toLowerCase();
+            var id = (curr.id || '').toLowerCase();
+            var cls = (curr.className || '').toString().toLowerCase();
+
+            if (text.indexOf('camera') !== -1 || text.indexOf('take photo') !== -1 || text.indexOf('take picture') !== -1 ||
+                aria.indexOf('camera') !== -1 || aria.indexOf('photo') !== -1 ||
+                id.indexOf('camera') !== -1 || id.indexOf('photo') !== -1 ||
+                cls.indexOf('camera') !== -1 || cls.indexOf('photo') !== -1) {
+              isCameraAction = true;
+              break;
+            }
+            curr = curr.parentElement;
+          }
+
+          if ((isImageInput || isCameraAction) && !window.__cameraPermissionGranted) {
+            requestNativePermissions(['CAMERA']).then(function() {
+              window.__cameraPermissionGranted = true;
+            }).catch(function() {});
+          }
+        } catch(err) {}
+      });
     } catch(e) {}
   })();
   true;
 `;
 
-export default function App() {
+let permissionQueue = Promise.resolve();
+
+const requestNativePermissionsAsync = async permissions => {
+  return new Promise(resolve => {
+    permissionQueue = permissionQueue.then(async () => {
+      if (Platform.OS !== 'android') {
+        resolve(true);
+        return;
+      }
+      try {
+        const toRequest = [];
+        for (const perm of permissions) {
+          let androidPerm = null;
+          if (perm === 'RECORD_AUDIO') {
+            androidPerm = PermissionsAndroid.PERMISSIONS.RECORD_AUDIO;
+          } else if (perm === 'CAMERA') {
+            androidPerm = PermissionsAndroid.PERMISSIONS.CAMERA;
+          } else if (perm === 'ACCESS_FINE_LOCATION') {
+            androidPerm = PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION;
+          }
+
+          if (androidPerm) {
+            const has = await PermissionsAndroid.check(androidPerm);
+            if (!has) {
+              toRequest.push(androidPerm);
+              if (androidPerm === PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION) {
+                toRequest.push(PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION);
+              }
+            }
+          }
+        }
+
+        if (toRequest.length === 0) {
+          resolve(true);
+          return;
+        }
+
+        const results = await PermissionsAndroid.requestMultiple(toRequest);
+        let allGranted = true;
+        for (const p of toRequest) {
+          if (p === PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION) continue;
+          if (results[p] !== PermissionsAndroid.RESULTS.GRANTED) {
+            allGranted = false;
+          }
+        }
+        resolve(allGranted);
+      } catch (err) {
+        console.warn('Native permission request error:', err);
+        resolve(false);
+      }
+    });
+  });
+};
+
+const isMicrosoftOAuthUrl = (url = '') => {
+  if (!url || typeof url !== 'string') return false;
+  const lower = url.toLowerCase();
+
+  // Internal app or auth endpoints under markytics.ai are NEVER external Microsoft OAuth
+  if (lower.includes('markytics.ai')) {
+    return false;
+  }
+
+  // Strictly match genuine Microsoft OAuth / Azure AD login hosts
+  return (
+    lower.includes('login.microsoftonline.com') ||
+    lower.includes('login.microsoft.com') ||
+    lower.includes('login.live.com') ||
+    lower.includes('account.live.com')
+  );
+};
+
+function MainApp() {
   const webViewRef = useRef(null);
   const [canGoBack, setCanGoBack] = useState(false);
   const [loading, setLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
+  // True only when the top frame is genuinely on Microsoft's OAuth login page
+  const [inMicrosoftAuth, setInMicrosoftAuth] = useState(false);
+  // Animation value for smooth fade/slide
+  const msBackAnim = useRef(new Animated.Value(0)).current;
+  // Lock to prevent back-button flicker during return transition
+  const isReturningToLoginRef = useRef(false);
+
+  useEffect(() => {
+    Animated.timing(msBackAnim, {
+      toValue: inMicrosoftAuth ? 1 : 0,
+      duration: inMicrosoftAuth ? 220 : 120,
+      useNativeDriver: true,
+    }).start();
+  }, [inMicrosoftAuth]);
+
+  // Request all 3 major permissions upfront on app open (Camera, Mic, Location)
+  useEffect(() => {
+    const requestInitialPermissions = async () => {
+      if (Platform.OS === 'android') {
+        try {
+          await PermissionsAndroid.requestMultiple([
+            PermissionsAndroid.PERMISSIONS.CAMERA,
+            PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+            PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+            PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
+          ]);
+        } catch (_) {
+          // If rejected at that moment, leave it. Fallback is handled on-demand during actual actions.
+        }
+      }
+    };
+
+    const permTimer = setTimeout(() => {
+      requestInitialPermissions();
+    }, 600);
+
+    return () => clearTimeout(permTimer);
+  }, []);
 
   // Failsafe: ensure loading screen dismisses after 3 seconds even if website slow
   useEffect(() => {
@@ -192,9 +448,36 @@ export default function App() {
     return () => clearTimeout(timer);
   }, []);
 
+  // Navigate back to the main login page (abort Microsoft auth)
+  const returnToLogin = () => {
+    // 1. Immediately hide the back button with ZERO delay
+    setInMicrosoftAuth(false);
+    isReturningToLoginRef.current = true;
+
+    // 2. Smoothly replace URL in current webview without unmounting / flashing
+    if (webViewRef.current) {
+      try {
+        webViewRef.current.stopLoading();
+        webViewRef.current.injectJavaScript(
+          `window.location.replace('${TARGET_URL}'); true;`
+        );
+      } catch (_) {}
+    }
+
+    // 3. Unlock after transition completes
+    setTimeout(() => {
+      isReturningToLoginRef.current = false;
+    }, 2500);
+  };
+
   // Handle Android Hardware Back Button
   useEffect(() => {
     const onBackPress = () => {
+      // If in Microsoft auth flow, back = cancel auth and return to login
+      if (inMicrosoftAuth) {
+        returnToLogin();
+        return true; // handled
+      }
       if (canGoBack && webViewRef.current) {
         webViewRef.current.goBack();
         return true; // prevent exit
@@ -207,7 +490,7 @@ export default function App() {
     return () => {
       BackHandler.removeEventListener('hardwareBackPress', onBackPress);
     };
-  }, [canGoBack]);
+  }, [canGoBack, inMicrosoftAuth]);
 
   const handleRetry = () => {
     setHasError(false);
@@ -215,7 +498,7 @@ export default function App() {
     if (webViewRef.current) {
       webViewRef.current.reload();
     }
-    setTimeout(() => setLoading(false), 3000);
+    setTimeout(() => setLoading(false), 2000);
   };
 
   const handleMessage = async event => {
@@ -231,6 +514,13 @@ export default function App() {
         if (FileDownloadModule) {
           await FileDownloadModule.downloadUrl(url, filename, mimeType || 'application/octet-stream');
         }
+      } else if (message.type === 'REQUEST_PERMISSIONS') {
+        const { reqId, permissions } = message;
+        const granted = await requestNativePermissionsAsync(permissions || []);
+        if (webViewRef.current && reqId) {
+          const js = `if (window.__resolvePermissionRequest) { window.__resolvePermissionRequest('${reqId}', ${granted}); } true;`;
+          webViewRef.current.injectJavaScript(js);
+        }
       }
     } catch (e) {
       // Ignored
@@ -238,7 +528,7 @@ export default function App() {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top']}>
       <StatusBar barStyle="light-content" backgroundColor="#0F172A" />
 
       {hasError ? (
@@ -263,13 +553,16 @@ export default function App() {
             sharedCookiesEnabled={true}
             thirdPartyCookiesEnabled={true}
             startInLoadingState={false}
-            allowFileAccess={true}
-            allowFileAccessFromFileURLs={true}
-            allowUniversalAccessFromFileURLs={true}
-            mixedContentMode="always"
+            allowFileAccess={false}
+            allowFileAccessFromFileURLs={false}
+            allowUniversalAccessFromFileURLs={false}
+            mixedContentMode="never"
             allowsInlineMediaPlayback={true}
             mediaPlaybackRequiresUserAction={false}
-            originWhitelist={['*']}
+            mediaCapturePermissionGrantType="grant"
+            geolocationEnabled={true}
+            allowsProtectedMedia={true}
+            originWhitelist={['https://*']}
             setBuiltInZoomControls={false}
             setDisplayZoomControls={false}
             scalesPageToFit={false}
@@ -279,6 +572,7 @@ export default function App() {
             onMessage={handleMessage}
             onShouldStartLoadWithRequest={request => {
               const url = request.url || '';
+              // File downloads: intercept and hand off to native
               if (
                 url.endsWith('.csv') ||
                 url.endsWith('.xlsx') ||
@@ -293,10 +587,36 @@ export default function App() {
                 }
                 return false;
               }
+              // Only top-frame navigations dictate the Microsoft OAuth UI state
+              if (!isReturningToLoginRef.current && request.isTopFrame !== false) {
+                if (isMicrosoftOAuthUrl(url)) {
+                  setInMicrosoftAuth(true);
+                } else if (url.includes('markytics.ai')) {
+                  setInMicrosoftAuth(false);
+                }
+              }
               return true;
+            }}
+            onLoadStart={syntheticEvent => {
+              const url = syntheticEvent.nativeEvent.url || '';
+              if (!isReturningToLoginRef.current) {
+                if (isMicrosoftOAuthUrl(url)) {
+                  setInMicrosoftAuth(true);
+                } else if (url.includes('markytics.ai')) {
+                  setInMicrosoftAuth(false);
+                }
+              }
             }}
             onNavigationStateChange={navState => {
               setCanGoBack(navState.canGoBack);
+              const url = navState.url || '';
+              if (!isReturningToLoginRef.current) {
+                if (isMicrosoftOAuthUrl(url)) {
+                  setInMicrosoftAuth(true);
+                } else if (url.includes('markytics.ai')) {
+                  setInMicrosoftAuth(false);
+                }
+              }
             }}
             onLoadProgress={({ nativeEvent }) => {
               if (nativeEvent.progress >= 0.5) {
@@ -319,6 +639,37 @@ export default function App() {
             }}
           />
 
+          {inMicrosoftAuth && (
+            <Animated.View
+              style={[
+                styles.msBackOverlay,
+                {
+                  opacity: msBackAnim,
+                  transform: [
+                    {
+                      translateY: msBackAnim.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [-10, 0],
+                      }),
+                    },
+                  ],
+                },
+              ]}
+              pointerEvents="box-none"
+            >
+              <TouchableOpacity
+                style={styles.msBackButton}
+                onPress={returnToLogin}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel="Back to Mark One login"
+              >
+                <Text style={styles.msBackArrow}>{'← '}</Text>
+                <Text style={styles.msBackText}>Back to Mark One Login</Text>
+              </TouchableOpacity>
+            </Animated.View>
+          )}
+
           {loading && (
             <View style={styles.loadingOverlay} pointerEvents="none">
               <Image source={LOGO_IMG} style={styles.logoImage} resizeMode="contain" />
@@ -329,6 +680,14 @@ export default function App() {
         </View>
       )}
     </SafeAreaView>
+  );
+}
+
+export default function App() {
+  return (
+    <SafeAreaProvider>
+      <MainApp />
+    </SafeAreaProvider>
   );
 }
 
@@ -403,6 +762,43 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 15,
     fontWeight: '600',
+  },
+  // Microsoft auth floating overlay — appears over WebView without resizing it
+  msBackOverlay: {
+    position: 'absolute',
+    top: 12,
+    left: 16,
+    right: 16,
+    zIndex: 9999,
+    elevation: 9999,
+  },
+  msBackButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#0F172A',
+    borderWidth: 1,
+    borderColor: '#334155',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.35,
+    shadowRadius: 5,
+    elevation: 6,
+    alignSelf: 'flex-start',
+  },
+  msBackArrow: {
+    color: '#60A5FA',
+    fontSize: 18,
+    fontWeight: '700',
+    marginRight: 6,
+  },
+  msBackText: {
+    color: '#F8FAFC',
+    fontSize: 14,
+    fontWeight: '600',
+    letterSpacing: 0.2,
   },
 });
 

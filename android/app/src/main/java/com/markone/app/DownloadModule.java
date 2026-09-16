@@ -1,4 +1,4 @@
-package com.smartcollect.app;
+package com.markone.app;
 
 import android.app.DownloadManager;
 import android.content.ContentValues;
