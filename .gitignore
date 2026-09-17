@@ -24,6 +24,8 @@ ios/build/
 ios/*.xcworkspace
 !ios/SmartCollect.xcworkspace/contents.xcworkspacedata
 *.orig.*
+*.xcode.env.local
+.xcode.env.local
 
 # macOS
 .DS_Store
