@@ -39,6 +39,21 @@
                                            selector:@selector(handleAppBecomeActive)
                                                name:UIApplicationDidBecomeActiveNotification
                                              object:nil];
+  [[NSNotificationCenter defaultCenter] addObserver:self
+                                           selector:@selector(handleScreenCaptureChanged)
+                                               name:UIScreenCapturedDidChangeNotification
+                                             object:nil];
+}
+
+- (void)handleScreenCaptureChanged
+{
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if ([UIScreen mainScreen].isCaptured) {
+      [self handleAppResignActive];
+    } else {
+      [self handleAppBecomeActive];
+    }
+  });
 }
 
 - (void)handleAppResignActive
