@@ -14,10 +14,11 @@ import {
   Animated,
   AppState,
 } from 'react-native';
-import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaProvider, SafeAreaView, initialWindowMetrics } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 
 const { FileDownloadModule } = NativeModules;
+// Direct URL: if authenticated it opens My Customers; if not, ProtectedRoute redirects to /login:
 const TARGET_URL = 'https://productuat.markytics.ai/login';
 const LOGO_IMG = require('./assets/app_logo.jpg');
 
@@ -31,7 +32,7 @@ const DISABLE_ZOOM_JS = `
         meta.name = 'viewport';
         (document.head || document.documentElement).appendChild(meta);
       }
-      meta.setAttribute('content', 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover');
+      meta.setAttribute('content', 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content');
     } catch (e) {}
   })();
   true;
@@ -686,7 +687,6 @@ function MainApp() {
       // Ignored
     }
   };
-
   const updateAuthStatusFromUrl = url => {
     if (!url || isReturningToLoginRef.current) return;
     if (isMicrosoftOAuthUrl(url)) {
@@ -701,7 +701,18 @@ function MainApp() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+    // Edges: On iOS, use ['top', 'bottom'] for notch and home indicator bar.
+    // On Android, use ['top'] only.
+    // Applying 'bottom' edge on Android causes a destructive layout cycle with gesture navigation:
+    // when the keyboard opens, Android's adjustResize collapses the gesture bar inset to 0,
+    // which triggers SafeAreaView to remove bottom padding, shifting the WebView, causing the input
+    // to lose focus (blur). The blur triggers the keyboard to close, restoring the gesture inset,
+    // which re-adds bottom padding, refocuses the input, and re-opens the keyboard in an infinite loop
+    // that crashes the app.
+    <SafeAreaView
+      style={styles.container}
+      edges={Platform.OS === 'ios' ? ['top', 'bottom'] : ['top']}
+    >
       <StatusBar barStyle="light-content" backgroundColor="#0F172A" translucent={false} />
 
       {/* When connection fails and user hasn't approved offline mode yet, prompt them */}
@@ -712,7 +723,7 @@ function MainApp() {
           </View>
           <Text style={styles.errorTitle}>Connection Notice</Text>
           <Text style={styles.errorMessage}>
-            Your device does not have good internet connection. Are you still wish to continue?
+            Your device does not have good internet connection. Do you still wish to continue?
           </Text>
           <View style={styles.buttonRow}>
             <TouchableOpacity
@@ -886,7 +897,7 @@ function MainApp() {
 
 export default function App() {
   return (
-    <SafeAreaProvider>
+    <SafeAreaProvider initialWindowMetrics={initialWindowMetrics}>
       <MainApp />
     </SafeAreaProvider>
   );
