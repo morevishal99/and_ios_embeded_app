@@ -15,9 +15,9 @@ android {
     buildToolsVersion "34.0.0"
     compileSdkVersion 36
 
-    namespace "com.markone.app"
+    namespace "markone_mobile.app"
     defaultConfig {
-        applicationId "com.markone.app"
+        applicationId "markone_mobile.app"
         minSdkVersion 24
         targetSdkVersion 36
         versionCode 7

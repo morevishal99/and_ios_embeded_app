@@ -1,4 +1,4 @@
-package com.markone.app;
+package markone_mobile.app;
 
 import android.app.Application;
 import com.facebook.react.PackageList;

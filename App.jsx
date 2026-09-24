@@ -13,13 +13,15 @@ import {
   Platform,
   Animated,
   AppState,
+  ToastAndroid,
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView, initialWindowMetrics } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 
 const { FileDownloadModule } = NativeModules;
 // Direct URL: if authenticated it opens My Customers; if not, ProtectedRoute redirects to /login:
-const TARGET_URL = 'https://productuat.markytics.ai/login';
+// const TARGET_URL = 'https://productuat.markytics.ai/login';
+const TARGET_URL = 'https://auxilo.markytics.com/login';
 const LOGO_IMG = require('./assets/app_logo.jpg');
 
 // Script to lock viewport scale and prevent website zooming
@@ -412,6 +414,7 @@ const PERSIST_SESSION_JS = `
           window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'NETWORK_STATUS', isOnline: false }));
         }
       });
+
     } catch(e) {}
   })();
   true;
@@ -506,18 +509,18 @@ const isMicrosoftOAuthUrl = (url = '') => {
     const hostMatch = url.match(/^https?:\/\/([^/?#:]+)/i);
     const host = hostMatch ? hostMatch[1].toLowerCase() : url.toLowerCase();
 
-    // If host itself belongs to markytics.ai, it is an internal page, NOT external Microsoft OAuth
-    if (host.includes('markytics.ai')) {
+    // If host itself belongs to markytics, it is an internal page, NOT external Microsoft OAuth
+    if (host.includes('markytics.ai') || host.includes('markytics.com')) {
       return false;
     }
 
-    // Strictly match genuine Microsoft OAuth / Azure AD login hosts
+    // Match genuine Microsoft OAuth / Azure AD / Live / Windows SSO login hosts
     return (
-      host.includes('login.microsoftonline.com') ||
-      host.includes('login.microsoft.com') ||
-      host.includes('login.live.com') ||
-      host.includes('account.live.com') ||
-      host.includes('msftauth.net')
+      host.includes('microsoft') ||
+      host.includes('live.com') ||
+      host.includes('windows.net') ||
+      host.includes('msftauth') ||
+      host.includes('msauth')
     );
   } catch (e) {
     return false;
@@ -537,6 +540,10 @@ function MainApp() {
   const msBackAnim = useRef(new Animated.Value(0)).current;
   // Lock to prevent back-button flicker during return transition
   const isReturningToLoginRef = useRef(false);
+  // Track last back-press timestamp for "Press back again to exit" toast
+  const lastBackPressTimeRef = useRef(0);
+  // Track current active URL to differentiate root/home screens from sub-pages
+  const currentUrlRef = useRef(TARGET_URL);
 
   useEffect(() => {
     Animated.timing(msBackAnim, {
@@ -601,7 +608,12 @@ function MainApp() {
     setInMicrosoftAuth(false);
     isReturningToLoginRef.current = true;
 
-    // 2. Smoothly replace URL in current webview without unmounting / flashing
+    // 2. Clear returning lock after short 350ms transition so subsequent clicks work immediately
+    setTimeout(() => {
+      isReturningToLoginRef.current = false;
+    }, 350);
+
+    // 3. Smoothly replace URL in current webview without unmounting / flashing
     if (webViewRef.current) {
       try {
         webViewRef.current.stopLoading();
@@ -610,26 +622,45 @@ function MainApp() {
         );
       } catch (_) {}
     }
-
-    // 3. Unlock after transition completes
-    setTimeout(() => {
-      isReturningToLoginRef.current = false;
-    }, 2500);
   };
 
   // Handle Android Hardware Back Button
   useEffect(() => {
     const onBackPress = () => {
-      // If in Microsoft auth flow, back = cancel auth and return to login
+      // 1. If in Microsoft auth flow, back = cancel auth and return to login
       if (inMicrosoftAuth) {
         returnToLogin();
         return true; // handled
       }
-      if (canGoBack && webViewRef.current) {
+
+      const currentUrl = (currentUrlRef.current || '').toLowerCase();
+
+      // Check if current screen is considered a root screen (Login or Logged-in Home screen)
+      const isLoginScreen = currentUrl.includes('/login') || currentUrl === TARGET_URL.toLowerCase();
+      const isHomeScreen = currentUrl.includes('/portal/my-customers') ||
+                           currentUrl.endsWith('/portal') ||
+                           currentUrl.endsWith('/portal/');
+      const isRootScreen = isLoginScreen || isHomeScreen || !canGoBack;
+
+      // 2. If on a sub-page and not a root screen, let WebView go back
+      if (canGoBack && !isRootScreen && webViewRef.current) {
         webViewRef.current.goBack();
-        return true; // prevent exit
+        return true;
       }
-      return false; // allow default back action
+
+      // 3. On root screen (Login or Logged-in Home screen) or when nowhere to go back:
+      // Double tap back within 2 seconds to exit app with toast prompt
+      const now = Date.now();
+      if (now - lastBackPressTimeRef.current < 2000) {
+        BackHandler.exitApp();
+        return true;
+      }
+
+      lastBackPressTimeRef.current = now;
+      if (Platform.OS === 'android') {
+        ToastAndroid.show('Press back again to exit', ToastAndroid.SHORT);
+      }
+      return true;
     };
 
     BackHandler.addEventListener('hardwareBackPress', onBackPress);
@@ -682,19 +713,22 @@ function MainApp() {
         if (message.isOnline) {
           setIsOfflineModeActive(false);
         }
+
       }
     } catch (e) {
       // Ignored
     }
   };
   const updateAuthStatusFromUrl = url => {
-    if (!url || isReturningToLoginRef.current) return;
+    if (!url) return;
+    currentUrlRef.current = url;
     if (isMicrosoftOAuthUrl(url)) {
+      isReturningToLoginRef.current = false;
       setInMicrosoftAuth(true);
-    } else {
+    } else if (!isReturningToLoginRef.current) {
       const hostMatch = url.match(/^https?:\/\/([^/?#:]+)/i);
       const host = hostMatch ? hostMatch[1].toLowerCase() : url.toLowerCase();
-      if (host.includes('markytics.ai')) {
+      if (host.includes('markytics.ai') || host.includes('markytics.com')) {
         setInMicrosoftAuth(false);
       }
     }
@@ -817,12 +851,20 @@ function MainApp() {
               updateAuthStatusFromUrl(url);
             }}
             onLoadProgress={({ nativeEvent }) => {
+              if (nativeEvent.url) {
+                updateAuthStatusFromUrl(nativeEvent.url);
+              }
               if (nativeEvent.progress >= 0.5) {
                 setLoading(false);
               }
             }}
             onLoad={() => setLoading(false)}
-            onLoadEnd={() => setLoading(false)}
+            onLoadEnd={syntheticEvent => {
+              setLoading(false);
+              if (syntheticEvent.nativeEvent && syntheticEvent.nativeEvent.url) {
+                updateAuthStatusFromUrl(syntheticEvent.nativeEvent.url);
+              }
+            }}
             onError={syntheticEvent => {
               const { nativeEvent } = syntheticEvent;
               console.warn('WebView error: ', nativeEvent);
