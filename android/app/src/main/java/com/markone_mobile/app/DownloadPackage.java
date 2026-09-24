@@ -1,4 +1,4 @@
-package markone_mobile.app;
+package com.markone_mobile.app;
 
 import com.facebook.react.ReactPackage;
 import com.facebook.react.bridge.NativeModule;

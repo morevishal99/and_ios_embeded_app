@@ -22,8 +22,8 @@
 -keep class com.facebook.hermes.** { *; }
 
 # Custom app modules and download bridge
--keep class markone_mobile.app.** { *; }
--keepclassmembers class markone_mobile.app.DownloadModule { *; }
+-keep class com.markone_mobile.app.** { *; }
+-keepclassmembers class com.markone_mobile.app.DownloadModule { *; }
 
 # React Native WebView rules
 -keep class com.reactnativecommunity.webview.** { *; }
