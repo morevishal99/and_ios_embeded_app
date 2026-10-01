@@ -1,4 +1,4 @@
-package com.markone_mobile.app;
+package com.markone.app;
 
 import com.facebook.react.ReactPackage;
 import com.facebook.react.bridge.NativeModule;
@@ -14,6 +14,7 @@ public class DownloadPackage implements ReactPackage {
     public List<NativeModule> createNativeModules(ReactApplicationContext reactContext) {
         List<NativeModule> modules = new ArrayList<>();
         modules.add(new DownloadModule(reactContext));
+        modules.add(new DeviceLocationModule(reactContext));
         return modules;
     }
 

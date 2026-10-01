@@ -32,15 +32,15 @@
 		<true/>
 	</dict>
 	<key>NSCameraUsageDescription</key>
-	<string>Camera access is required for scanning and document uploads.</string>
+	<string>Mark One needs access to your camera to capture visit verification photos.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Photo library access is required for selecting and uploading documents.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Access is required to save downloaded files.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Location access is required for verification.</string>
+	<string>Mark One uses your location to record the coordinates and address of customer field visits. For example, when an agent submits a customer visit report, the exact GPS coordinates and verified address are recorded with the visit verification log.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Microphone access is required for audio calls and voice features.</string>
+	<string>Mark One uses your microphone for in-app WebRTC and dialer calls with customers.</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIRequiredDeviceCapabilities</key>
@@ -50,9 +50,13 @@
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
+	<key>UIRequiresFullScreen</key>
+	<true/>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<false/>
 </dict>

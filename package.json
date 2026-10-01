@@ -1,13 +1,14 @@
 {
   "name": "MarkOne",
-  "version": "1.0.0",
+  "version": "1.1.1",
   "private": true,
   "scripts": {
     "android": "react-native run-android",
     "ios": "react-native run-ios",
     "start": "react-native start",
     "build:apk": "cd android && gradlew assembleRelease",
-    "build:debug": "cd android && gradlew assembleDebug"
+    "build:debug": "cd android && gradlew assembleDebug",
+    "build:bundle": "cd android && ./gradlew clean bundleRelease && python3 ../scripts/patch_aab_16kb.py"
   },
   "dependencies": {
     "react": "18.2.0",

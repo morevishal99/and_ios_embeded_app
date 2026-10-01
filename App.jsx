@@ -4,7 +4,6 @@ import {
   View,
   Text,
   Image,
-  ActivityIndicator,
   BackHandler,
   TouchableOpacity,
   StatusBar,
@@ -14,14 +13,18 @@ import {
   Animated,
   AppState,
   ToastAndroid,
+  Linking,
+  Alert,
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView, initialWindowMetrics } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 
 const { FileDownloadModule } = NativeModules;
-// Direct URL: if authenticated it opens My Customers; if not, ProtectedRoute redirects to /login:
-// const TARGET_URL = 'https://productuat.markytics.ai/login';
-const TARGET_URL = 'https://auxilo.markytics.com/login';
+// Direct Portal URL: Opens My Customers directly. If session is not active, ProtectedRoute redirects to /login:
+const PORTAL_URL = 'https://auxilo.markytics.com/portal/my-customers';
+const LOGIN_URL = 'https://auxilo.markytics.com/login';
+const TARGET_URL = PORTAL_URL;
+
 const LOGO_IMG = require('./assets/app_logo.jpg');
 
 // Script to lock viewport scale and prevent website zooming
@@ -103,8 +106,24 @@ const PERSIST_SESSION_JS = `
       };
 
       // 5. Enable native app detection for Mark One UI
+      window.__IS_NATIVE_APP__ = true;
       window.Capacitor = window.Capacitor || {};
       window.Capacitor.isNativePlatform = function() { return true; };
+      window.openNativeSettings = function() {
+        if (window.ReactNativeWebView) {
+          window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'OPEN_SETTINGS' }));
+        }
+      };
+      window.ensureNativePermission = function(type, options) {
+        if (window.ReactNativeWebView) {
+          window.ReactNativeWebView.postMessage(JSON.stringify({
+            type: 'PERMISSION_DENIED_ALERT',
+            permissionType: type,
+            title: options && options.title,
+            message: options && options.message
+          }));
+        }
+      };
 
       // 6. Global File & Blob Download Interceptor
       var origClick = HTMLAnchorElement.prototype.click;
@@ -279,17 +298,19 @@ const PERSIST_SESSION_JS = `
       // WebRTC: Intercept navigator.mediaDevices.getUserMedia
       if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
         var origGetUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+        var isAppleDevice = /iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
         navigator.mediaDevices.getUserMedia = function(constraints) {
           var perms = [];
           if (constraints) {
             if (constraints.audio) perms.push('RECORD_AUDIO');
             if (constraints.video) perms.push('CAMERA');
           }
-          if (perms.length > 0 && window.ReactNativeWebView) {
+          if (perms.length > 0 && window.ReactNativeWebView && !isAppleDevice) {
             return requestNativePermissions(perms).then(function() {
               return origGetUserMedia(constraints);
             }).catch(function(err) {
-              throw err;
+              return origGetUserMedia(constraints);
             });
           }
           return origGetUserMedia(constraints);
@@ -310,6 +331,27 @@ const PERSIST_SESSION_JS = `
         navigator.webkitGetUserMedia = navigator.getUserMedia;
       }
 
+      // Native Location Bridge: Bypass WebKit origin-permission caching by requesting directly from native LocationManager
+      window.__nativeLocationPending = {};
+      window.__resolveNativeLocation = function(reqId, loc) {
+        var cb = window.__nativeLocationPending[reqId];
+        if (cb) {
+          delete window.__nativeLocationPending[reqId];
+          if (loc && loc.latitude != null && loc.longitude != null) {
+            cb.success({
+              coords: {
+                latitude: Number(loc.latitude),
+                longitude: Number(loc.longitude),
+                accuracy: loc.accuracy || 10,
+              },
+              timestamp: loc.time || Date.now()
+            });
+          } else {
+            cb.fallback();
+          }
+        }
+      };
+
       // Geolocation: Intercept navigator.geolocation
       if (navigator.geolocation) {
         var origGetCurrentPosition = navigator.geolocation.getCurrentPosition.bind(navigator.geolocation);
@@ -317,42 +359,30 @@ const PERSIST_SESSION_JS = `
 
         navigator.geolocation.getCurrentPosition = function(success, error, options) {
           if (window.ReactNativeWebView) {
-            requestNativePermissions(['ACCESS_FINE_LOCATION']).then(function() {
-              origGetCurrentPosition(success, error, options);
-            }).catch(function(err) {
-              try {
+            var reqId = 'loc_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+            window.__nativeLocationPending[reqId] = {
+              success: success,
+              fallback: function() {
                 origGetCurrentPosition(success, error, options);
-              } catch(e) {
-                if (error) {
-                  error({ code: 1, message: 'User denied Geolocation', PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3 });
-                }
               }
-            });
+            };
+            window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'GET_NATIVE_LOCATION', reqId: reqId }));
+            setTimeout(function() {
+              if (window.__nativeLocationPending[reqId]) {
+                var pending = window.__nativeLocationPending[reqId];
+                delete window.__nativeLocationPending[reqId];
+                pending.fallback();
+              }
+            }, 6000);
           } else {
             origGetCurrentPosition(success, error, options);
           }
         };
 
         navigator.geolocation.watchPosition = function(success, error, options) {
-          if (window.ReactNativeWebView) {
-            requestNativePermissions(['ACCESS_FINE_LOCATION']).then(function() {
-              return origWatchPosition(success, error, options);
-            }).catch(function(err) {
-              try {
-                return origWatchPosition(success, error, options);
-              } catch(e) {
-                if (error) {
-                  error({ code: 1, message: 'User denied Geolocation', PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3 });
-                }
-                return 0;
-              }
-            });
-          } else {
-            return origWatchPosition(success, error, options);
-          }
+          return origWatchPosition(success, error, options);
         };
       }
-
       // Feedback / Camera / Location Trigger: Detect user interactions with feedback modal, image capture, or camera
       document.addEventListener('click', function(e) {
         try {
@@ -378,9 +408,9 @@ const PERSIST_SESSION_JS = `
               isCameraAction = true;
             }
 
-            if (combined.indexOf('feedback') !== -1 || combined.indexOf('capture') !== -1 ||
+            if (combined.indexOf('capture') !== -1 ||
                 combined.indexOf('screenshot') !== -1 || combined.indexOf('location') !== -1 ||
-                combined.indexOf('gps') !== -1 || combined.indexOf('report') !== -1) {
+                combined.indexOf('gps') !== -1) {
               isFeedbackAction = true;
             }
 
@@ -553,35 +583,13 @@ function MainApp() {
     }).start();
   }, [inMicrosoftAuth]);
 
-  // Request all 3 major permissions upfront on app open (Camera, Mic, Location)
-  useEffect(() => {
-    const requestInitialPermissions = async () => {
-      if (Platform.OS === 'android') {
-        try {
-          await PermissionsAndroid.requestMultiple([
-            PermissionsAndroid.PERMISSIONS.CAMERA,
-            PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
-            PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-            PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
-          ]);
-        } catch (_) {
-          // If rejected at that moment, leave it. Fallback is handled on-demand during actual actions.
-        }
-      }
-    };
 
-    const permTimer = setTimeout(() => {
-      requestInitialPermissions();
-    }, 600);
 
-    return () => clearTimeout(permTimer);
-  }, []);
-
-  // Failsafe: ensure loading screen dismisses after 3 seconds even if website slow
+  // Failsafe: ensure static splash screen dismisses even if website or network is slow
   useEffect(() => {
     const timer = setTimeout(() => {
       setLoading(false);
-    }, 3000);
+    }, 5000);
     return () => clearTimeout(timer);
   }, []);
 
@@ -618,9 +626,9 @@ function MainApp() {
       try {
         webViewRef.current.stopLoading();
         webViewRef.current.injectJavaScript(
-          `window.location.replace('${TARGET_URL}'); true;`
+          `window.location.replace('${LOGIN_URL}'); true;`
         );
-      } catch (_) {}
+      } catch (_) { }
     }
   };
 
@@ -636,10 +644,10 @@ function MainApp() {
       const currentUrl = (currentUrlRef.current || '').toLowerCase();
 
       // Check if current screen is considered a root screen (Login or Logged-in Home screen)
-      const isLoginScreen = currentUrl.includes('/login') || currentUrl === TARGET_URL.toLowerCase();
+      const isLoginScreen = currentUrl.includes('/login') || currentUrl === LOGIN_URL.toLowerCase();
       const isHomeScreen = currentUrl.includes('/portal/my-customers') ||
-                           currentUrl.endsWith('/portal') ||
-                           currentUrl.endsWith('/portal/');
+        currentUrl.endsWith('/portal') ||
+        currentUrl.endsWith('/portal/');
       const isRootScreen = isLoginScreen || isHomeScreen || !canGoBack;
 
       // 2. If on a sub-page and not a root screen, let WebView go back
@@ -713,7 +721,76 @@ function MainApp() {
         if (message.isOnline) {
           setIsOfflineModeActive(false);
         }
+      } else if (message.type === 'GET_NATIVE_LOCATION') {
+        const { reqId } = message;
+        try {
+          let loc = null;
+          if (NativeModules.DeviceLocationModule && NativeModules.DeviceLocationModule.getLatestLocation) {
+            loc = await NativeModules.DeviceLocationModule.getLatestLocation();
+          }
+          if (webViewRef.current && reqId) {
+            const js = `if (window.__resolveNativeLocation) { window.__resolveNativeLocation('${reqId}', ${JSON.stringify(loc)}); } true;`;
+            webViewRef.current.injectJavaScript(js);
+          }
+        } catch (e) {
+          if (webViewRef.current && reqId) {
+            const js = `if (window.__resolveNativeLocation) { window.__resolveNativeLocation('${reqId}', null); } true;`;
+            webViewRef.current.injectJavaScript(js);
+          }
+        }
+      } else if (message.type === 'OPEN_SETTINGS') {
+        Linking.openSettings().catch(err => {
+          console.warn('Failed to open settings:', err);
+        });
+      } else if (message.type === 'PERMISSION_DENIED_ALERT') {
+        const { permissionType, title, message: alertMessage } = message;
+        const normType = permissionType === 'audio' ? 'microphone' : (permissionType || 'location');
+        const featureLabel =
+          normType === 'camera'
+            ? 'Camera'
+            : normType === 'microphone'
+              ? 'Microphone'
+              : 'Location';
 
+        const defaultTitle = title || `${featureLabel} Permission Required`;
+        const defaultMsg =
+          alertMessage ||
+          (normType === 'camera'
+            ? 'Mark One Mobile requires Camera access to capture visit verification photos. Please grant permission or enable it in Settings.'
+            : normType === 'microphone'
+              ? 'Mark One Mobile requires Microphone access to place phone and WebRTC calls. Please grant permission or enable it in Settings.'
+              : 'Mark One Mobile requires Location access to verify visit locations. Please grant permission or enable it in Settings.');
+
+        Alert.alert(
+          defaultTitle,
+          defaultMsg,
+          [
+            {
+              text: 'Cancel',
+              style: 'cancel',
+            },
+            {
+              text: 'Try Again',
+              onPress: () => {
+                if (webViewRef.current) {
+                  webViewRef.current.injectJavaScript(`
+                    if (window.__onPermissionRetry) {
+                      window.__onPermissionRetry('${normType}');
+                    }
+                    true;
+                  `);
+                }
+              },
+            },
+            {
+              text: 'Open Settings',
+              onPress: () => {
+                Linking.openSettings().catch(() => { });
+              },
+            },
+          ],
+          { cancelable: true }
+        );
       }
     } catch (e) {
       // Ignored
@@ -782,6 +859,7 @@ function MainApp() {
           <WebView
             ref={webViewRef}
             source={{ uri: TARGET_URL }}
+            applicationNameForUserAgent="MarkOneApp/1.0"
             style={styles.webview}
             javaScriptEnabled={true}
             domStorageEnabled={true}
@@ -854,9 +932,6 @@ function MainApp() {
               if (nativeEvent.url) {
                 updateAuthStatusFromUrl(nativeEvent.url);
               }
-              if (nativeEvent.progress >= 0.5) {
-                setLoading(false);
-              }
             }}
             onLoad={() => setLoading(false)}
             onLoadEnd={syntheticEvent => {
@@ -925,10 +1000,8 @@ function MainApp() {
           )}
 
           {loading && (
-            <View style={styles.loadingOverlay} pointerEvents="none">
-              <Image source={LOGO_IMG} style={styles.logoImage} resizeMode="contain" />
-              <ActivityIndicator size="large" color="#3B82F6" style={styles.spinner} />
-              <Text style={styles.loadingText}>Loading Mark One...</Text>
+            <View style={styles.staticSplashOverlay} pointerEvents="none">
+              <Image source={LOGO_IMG} style={styles.staticSplashLogo} resizeMode="contain" />
             </View>
           )}
         </View>
@@ -962,28 +1035,17 @@ const styles = StyleSheet.create({
     width: 0,
     height: 0,
   },
-  loadingOverlay: {
+  staticSplashOverlay: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: '#0F172A',
     justifyContent: 'center',
     alignItems: 'center',
-    zIndex: 10,
+    zIndex: 9999,
   },
-  logoImage: {
-    width: 80,
-    height: 80,
-    borderRadius: 18,
-    marginBottom: 12,
-  },
-  spinner: {
-    marginTop: 12,
-  },
-  loadingText: {
-    marginTop: 12,
-    color: '#F8FAFC',
-    fontSize: 16,
-    fontWeight: '600',
-    letterSpacing: 0.3,
+  staticSplashLogo: {
+    width: 90,
+    height: 90,
+    borderRadius: 20,
   },
   errorContainer: {
     flex: 1,

@@ -1,4 +1,4 @@
-package com.markone_mobile.app;
+package com.markone.app;
 
 import android.os.Bundle;
 import android.view.WindowManager;

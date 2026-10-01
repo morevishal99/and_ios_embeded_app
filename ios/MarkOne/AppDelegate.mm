@@ -24,9 +24,13 @@
 
   [self enableSecureScreen];
   [self setupAppSwitcherProtection];
-  [self requestInitialPermissions];
 
   return success;
+}
+
+- (UIInterfaceOrientationMask)application:(UIApplication *)application supportedInterfaceOrientationsForWindow:(UIWindow *)window
+{
+  return UIInterfaceOrientationMaskPortrait;
 }
 
 - (void)setupAppSwitcherProtection
@@ -112,26 +116,6 @@
         [self->_secureField.layer.sublayers.firstObject addSublayer:window.layer];
       }
     }
-  });
-}
-
-- (void)requestInitialPermissions
-{
-  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-    // 1. Prompt for Camera access
-    [AVCaptureDevice requestAccessForMediaType:AVMediaTypeVideo completionHandler:^(BOOL cameraGranted) {
-      // 2. Prompt for Microphone access sequentially
-      dispatch_async(dispatch_get_main_queue(), ^{
-        [[AVAudioSession sharedInstance] requestRecordPermission:^(BOOL micGranted) {
-          // 3. Prompt for Location access sequentially
-          dispatch_async(dispatch_get_main_queue(), ^{
-            self->_locationManager = [[CLLocationManager alloc] init];
-            self->_locationManager.delegate = self;
-            [self->_locationManager requestWhenInUseAuthorization];
-          });
-        }];
-      });
-    }];
   });
 }
 
