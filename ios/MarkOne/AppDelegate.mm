@@ -1,8 +1,9 @@
 #import "AppDelegate.h"
 
-#import <React/RCTBundleURLProvider.h>
 #import <AVFoundation/AVFoundation.h>
 #import <CoreLocation/CoreLocation.h>
+#import <React/RCTBundleURLProvider.h>
+#import <ReactAppDependencyProvider/RCTAppDependencyProvider.h>
 
 @interface AppDelegate () <CLLocationManagerDelegate>
 @end
@@ -13,14 +14,16 @@
   CLLocationManager *_locationManager;
 }
 
-- (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions
-{
+- (BOOL)application:(UIApplication *)application
+    didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
   self.moduleName = @"MarkOne";
   // You can add your custom initial props in the dictionary below.
   // They will be passed down to the ViewController used by React Native.
   self.initialProps = @{};
+  self.dependencyProvider = [RCTAppDependencyProvider new];
 
-  BOOL success = [super application:application didFinishLaunchingWithOptions:launchOptions];
+  BOOL success = [super application:application
+      didFinishLaunchingWithOptions:launchOptions];
 
   [self enableSecureScreen];
   [self setupAppSwitcherProtection];
@@ -28,29 +31,30 @@
   return success;
 }
 
-- (UIInterfaceOrientationMask)application:(UIApplication *)application supportedInterfaceOrientationsForWindow:(UIWindow *)window
-{
+- (UIInterfaceOrientationMask)application:(UIApplication *)application
+    supportedInterfaceOrientationsForWindow:(UIWindow *)window {
   return UIInterfaceOrientationMaskPortrait;
 }
 
-- (void)setupAppSwitcherProtection
-{
-  [[NSNotificationCenter defaultCenter] addObserver:self
-                                           selector:@selector(handleAppResignActive)
-                                               name:UIApplicationWillResignActiveNotification
-                                             object:nil];
-  [[NSNotificationCenter defaultCenter] addObserver:self
-                                           selector:@selector(handleAppBecomeActive)
-                                               name:UIApplicationDidBecomeActiveNotification
-                                             object:nil];
-  [[NSNotificationCenter defaultCenter] addObserver:self
-                                           selector:@selector(handleScreenCaptureChanged)
-                                               name:UIScreenCapturedDidChangeNotification
-                                             object:nil];
+- (void)setupAppSwitcherProtection {
+  [[NSNotificationCenter defaultCenter]
+      addObserver:self
+         selector:@selector(handleAppResignActive)
+             name:UIApplicationWillResignActiveNotification
+           object:nil];
+  [[NSNotificationCenter defaultCenter]
+      addObserver:self
+         selector:@selector(handleAppBecomeActive)
+             name:UIApplicationDidBecomeActiveNotification
+           object:nil];
+  [[NSNotificationCenter defaultCenter]
+      addObserver:self
+         selector:@selector(handleScreenCaptureChanged)
+             name:UIScreenCapturedDidChangeNotification
+           object:nil];
 }
 
-- (void)handleScreenCaptureChanged
-{
+- (void)handleScreenCaptureChanged {
   dispatch_async(dispatch_get_main_queue(), ^{
     if ([UIScreen mainScreen].isCaptured) {
       [self handleAppResignActive];
@@ -60,44 +64,46 @@
   });
 }
 
-- (void)handleAppResignActive
-{
+- (void)handleAppResignActive {
   UIWindow *window = self.window;
   if (!window) {
     window = [UIApplication sharedApplication].keyWindow;
   }
-  if (!window) return;
+  if (!window)
+    return;
 
   if (!_privacyShield) {
     _privacyShield = [[UIView alloc] initWithFrame:window.bounds];
     _privacyShield.backgroundColor = [UIColor blackColor];
-    _privacyShield.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    _privacyShield.autoresizingMask =
+        UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
   }
   _privacyShield.alpha = 1.0;
   [window addSubview:_privacyShield];
   [window bringSubviewToFront:_privacyShield];
 }
 
-- (void)handleAppBecomeActive
-{
+- (void)handleAppBecomeActive {
   if (_privacyShield && _privacyShield.superview) {
-    [UIView animateWithDuration:0.15 animations:^{
-      self->_privacyShield.alpha = 0.0;
-    } completion:^(BOOL finished) {
-      [self->_privacyShield removeFromSuperview];
-      self->_privacyShield = nil;
-    }];
+    [UIView animateWithDuration:0.15
+        animations:^{
+          self->_privacyShield.alpha = 0.0;
+        }
+        completion:^(BOOL finished) {
+          [self->_privacyShield removeFromSuperview];
+          self->_privacyShield = nil;
+        }];
   }
 }
 
-- (void)enableSecureScreen
-{
+- (void)enableSecureScreen {
   dispatch_async(dispatch_get_main_queue(), ^{
     UIWindow *window = self.window;
     if (!window) {
       window = [UIApplication sharedApplication].keyWindow;
     }
-    if (!window) return;
+    if (!window)
+      return;
 
     if (!self->_secureField) {
       CGRect screenBounds = [UIScreen mainScreen].bounds;
@@ -113,24 +119,28 @@
       }
 
       if (self->_secureField.layer.sublayers.count > 0) {
-        [self->_secureField.layer.sublayers.firstObject addSublayer:window.layer];
+        [self->_secureField.layer.sublayers.firstObject
+            addSublayer:window.layer];
       }
     }
   });
 }
 
-- (NSURL *)sourceURLForBridge:(RCTBridge *)bridge
-{
-  return [self getBundleURL];
-}
-
-- (NSURL *)getBundleURL
+- (NSURL *)bundleURL
 {
 #if DEBUG
   return [[RCTBundleURLProvider sharedSettings] jsBundleURLForBundleRoot:@"index"];
 #else
   return [[NSBundle mainBundle] URLForResource:@"main" withExtension:@"jsbundle"];
 #endif
+}
+
+- (NSURL *)sourceURLForBridge:(RCTBridge *)bridge {
+  return [self bundleURL];
+}
+
+- (NSURL *)getBundleURL {
+  return [self bundleURL];
 }
 
 @end

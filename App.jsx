@@ -20,10 +20,9 @@ import { SafeAreaProvider, SafeAreaView, initialWindowMetrics } from 'react-nati
 import { WebView } from 'react-native-webview';
 
 const { FileDownloadModule } = NativeModules;
-// Direct Portal URL: Opens My Customers directly. If session is not active, ProtectedRoute redirects to /login:
-const PORTAL_URL = 'https://auxilo.markytics.com/portal/my-customers';
-const LOGIN_URL = 'https://auxilo.markytics.com/login';
-const TARGET_URL = PORTAL_URL;
+// Universal Login URL: The web application determines the client dynamically (Auxilo, Sangli DCC, etc.) post-login.
+const LOGIN_URL = 'https://markone.markytics.com/login';
+const TARGET_URL = LOGIN_URL;
 
 const LOGO_IMG = require('./assets/app_logo.jpg');
 
@@ -646,6 +645,7 @@ function MainApp() {
       // Check if current screen is considered a root screen (Login or Logged-in Home screen)
       const isLoginScreen = currentUrl.includes('/login') || currentUrl === LOGIN_URL.toLowerCase();
       const isHomeScreen = currentUrl.includes('/portal/my-customers') ||
+        currentUrl.includes('/portal/customers') ||
         currentUrl.endsWith('/portal') ||
         currentUrl.endsWith('/portal/');
       const isRootScreen = isLoginScreen || isHomeScreen || !canGoBack;
@@ -671,10 +671,10 @@ function MainApp() {
       return true;
     };
 
-    BackHandler.addEventListener('hardwareBackPress', onBackPress);
+    const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
 
     return () => {
-      BackHandler.removeEventListener('hardwareBackPress', onBackPress);
+      subscription.remove();
     };
   }, [canGoBack, inMicrosoftAuth]);
 
