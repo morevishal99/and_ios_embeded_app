@@ -21,7 +21,8 @@ import { WebView } from 'react-native-webview';
 
 const { FileDownloadModule } = NativeModules;
 // Universal Login URL: The web application determines the client dynamically (Auxilo, Sangli DCC, etc.) post-login.
-const LOGIN_URL = 'https://markone.markytics.com/login';
+// const LOGIN_URL = 'https://markone.markytics.com/login';
+const LOGIN_URL = 'https://productuat.markytics.ai/login';
 const TARGET_URL = LOGIN_URL;
 
 const LOGO_IMG = require('./assets/app_logo.jpg');
